@@ -48,6 +48,9 @@ Windows are classified as productive or not in three tiers:
 
 You can also edit `known_windows.json` directly.
 
+## Screenshot
+![WorkWatch screenshot](assets/screenshot.png)
+
 ## ⚠️ Warning
 This app uses a locally-run LLM (via Ollama) to generate messages when it 
 detects you procrastinating. The model runs uncensored and is intentionally 
