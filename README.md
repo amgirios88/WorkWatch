@@ -1,5 +1,6 @@
 # WorkWatch
 App that helps user focus on work, making staying on non-productive windows annoying. Also reminds to drink water.
+This app uses a locally-run LLM (via Ollama) to generate messages when it detects you procrastinating. 
 
 
 A lightweight productivity monitor that nags you back to work 
@@ -47,8 +48,14 @@ Windows are classified as productive or not in three tiers:
 
 You can also edit `known_windows.json` directly.
 
-## Screenshot
-![WorkWatch screenshot](assets/screenshot.png)
+## ⚠️ Warning
+This app uses a locally-run LLM (via Ollama) to generate messages when it 
+detects you procrastinating. The model runs uncensored and is intentionally 
+prompted to be blunt and rude. Messages may be crude, aggressive, or 
+offensive. This is by design — if you want polite reminders, this is not 
+the app for you.
+
+All processing happens locally on your machine. No data is sent anywhere.
 
 ## License
 MIT
