@@ -462,8 +462,30 @@ class Companion:
         btn_frame.pack()
 
         # Extract a key word from title to store (not the full title)
-        # Store the most distinctive part — first meaningful word
-        key = title.split(" - ")[0].strip().lower()[:40]
+
+        # ISSUE 1 sorted - instead of using the first segment, use the second-to-last segment for browser titles, which is usually the site name. If that segment contains · or |, use the part after that as the key.
+        def extract_key(t: str) -> str:
+            parts = [p.strip() for p in t.split(" - ") if p.strip()]
+            browsers = ["google chrome", "firefox", "mozilla firefox",
+                        "microsoft edge", "safari", "opera", "brave"]
+            lower_t = t.lower()
+            is_browser = any(b in lower_t for b in browsers)
+            if is_browser and len(parts) >= 2:
+                # Use second-to-last segment — that's the site name in browser titles
+                # e.g. "Issues · GitHub - Google Chrome" → "Issues · GitHub"
+                site_part = parts[-2]
+                # If it contains · or |, the part after is usually the site name
+                for sep in ["·", "|", "–", "—"]:
+                    if sep in site_part:
+                        after = site_part.split(sep)[-1].strip().lower()
+                        if len(after) > 2:
+                            return after[:30]
+                # Otherwise just use the whole segment
+                return site_part.lower()[:30]
+            else:
+                return parts[0].lower()[:30] if parts else t.lower()[:30]
+
+        key = extract_key(title)
 
         def mark_work():
             self.known_lists["work"].append(key)
