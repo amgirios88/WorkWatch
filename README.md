@@ -52,7 +52,7 @@ You can also edit `known_windows.json` directly.
 This app uses a locally-run LLM (via Ollama) to generate messages when it 
 detects you procrastinating. The model runs uncensored and is intentionally 
 prompted to be blunt and rude. Messages may be crude, aggressive, or 
-offensive. This is by design — if you want polite reminders, this is not 
+may include swearing. This is by design — if you want polite reminders, this is not 
 the app for you.
 
 All processing happens locally on your machine. No data is sent anywhere.
