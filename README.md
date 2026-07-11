@@ -2,8 +2,6 @@
 App that helps user focus on work, making staying on non-productive windows annoying. Also reminds to drink water.
 
 
-# WorkWatch
-
 A lightweight productivity monitor that nags you back to work 
 when you've been procrastinating too long, and reminds you to 
 drink water every 30 minutes.
