@@ -16,7 +16,7 @@ drink water every 30 minutes.
 ## Requirements
 - Python 3.11+
 - Ollama running locally (https://ollama.com)
-- Windows (Linux/Mac partial support via pygame)
+- Windows (May update for Linux/Mac in future)
 
 ## Installation
 
