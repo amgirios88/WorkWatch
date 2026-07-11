@@ -3,6 +3,10 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# WorkWatch runtime files
+known_windows.json
+watcher_settings.json
+
 # C extensions
 *.so
 
