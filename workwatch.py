@@ -160,16 +160,18 @@ def save_settings(settings: dict):
 
 # predefined lists of known productive and non-productive windows
 ALWAYS_NON_PRODUCTIVE = [
-    "youtube.com", "netflix", "whatsapp", "tiktok", "instagram",
+    "youtube", "netflix", "whatsapp", "tiktok", "instagram",
     "facebook", "twitter", "x.com", "twitch", "discord",
     "spotify", "prime video", "disneyplus", "hbo max",
+    "lords of the fallen", "steam", "epic games",
 ]
 
 ALWAYS_PRODUCTIVE = [
     "visual studio code", "vscode", "powerpoint", "microsoft word",
     "excel", "jupyter", "localhost", "pubmed", "scholar",
     "overleaf", "github", "rstudio", "terminal", "cmd",
-    "anaconda", "spyder", "pycharm",
+    "anaconda", "spyder", "pycharm", "stack overflow", "stackoverflow",
+    "docs.python.org", "readthedocs", "bioconductor", "ncbi",
 ]
 
 # user can add their own known productive or non-productive windows to this file manually. Additionally, a popup will ask the user if they want to
@@ -401,6 +403,54 @@ class Companion:
 
 
     # ── Drink reminder checker ─────────────────────────────────────────────
+    def _check_non_productive(self):
+        """Called every 30 seconds. If in a non-productive window long enough, fire a message."""
+        if self.current_mode == "not_work":
+            if self.non_productive_since is None:
+                self.non_productive_since = time.time()
+            elapsed = time.time() - self.non_productive_since
+            if elapsed >= self.non_productive_threshold:
+                self.escalation_level += 1
+                message = self._get_escalation_message()
+                self.root.after(0, lambda m=message, e=self.escalation_level:
+                                self._show_bubble(m, escalation=e, sound_type="alert"))
+        else:
+            self.non_productive_since = None
+            self.escalation_level = 0
+        self.root.after(30_000, self._check_non_productive)
+
+    def _get_escalation_message(self) -> str:
+        """Generate a message via LLM, escalating in aggression over time."""
+        level = self.escalation_level
+        elapsed = int(time.time() - self.non_productive_since) if self.non_productive_since else 0
+        minutes = elapsed // 60
+        window = self.current_window[:60] if self.current_window else "something unproductive"
+
+        if level <= 1:
+            tone = "mildly annoyed. One sentence."
+        elif level <= 3:
+            tone = "increasingly irritated and blunt. One sentence. You can swear."
+        else:
+            tone = "furious. Aggressive. No filter. One sentence."
+
+        prompt = (
+            f"The user has been on '{window}' for {minutes} minute(s) instead of working. "
+            f"Tell them to get back to work. Tone: {tone}"
+        )
+        try:
+            return call_llm(self.model, [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt}
+            ], timeout=15)
+        except Exception:
+            fallbacks = [
+                "Get back to work.",
+                "Seriously. Close that and work.",
+                "I will not stop until you get back to work.",
+                "WORK. NOW.",
+            ]
+            return fallbacks[min(level - 1, len(fallbacks) - 1)]
+
     def _check_drink_reminder(self):
         message = drink_reminder()
         self.root.after(0, lambda m=message: self._show_bubble(m, escalation=0, sound_type="water"))
@@ -431,79 +481,131 @@ class Companion:
         return "unknown"
     
     def _ask_classify(self, title: str):
-        """Ask user if current window is work or not. Auto-dismisses in 30s."""
+        """Ask user if current window is work or not. Shows editable key, auto-dismisses in 30s."""
         if self._classifying:
             return
         self._classifying = True
 
+        def extract_key(t: str) -> str:
+            import re as _re
+            lower_t = t.lower()
+            browsers = ["google chrome", "firefox", "mozilla firefox",
+                        "microsoft edge", "safari", "opera", "brave"]
+            is_browser = any(b in lower_t for b in browsers)
+
+            if not is_browser:
+                parts = [p.strip() for p in t.split(" - ") if p.strip()]
+                return parts[0].lower()[:40] if parts else lower_t[:40]
+
+            # Strip browser name from end
+            stripped = t
+            for suffix in [" \u2014 mozilla firefox", " \u2013 mozilla firefox",
+                            " - google chrome", " - microsoft edge",
+                            " - safari", " - opera", " - brave"]:
+                if lower_t.endswith(suffix):
+                    stripped = t[:len(t) - len(suffix)].strip()
+                    break
+
+            # Try em-dash / middle dot separators first
+            # Check for subreddit pattern anywhere in the stripped title
+            sub_match = _re.search(r"r/([a-zA-Z0-9_]+)", stripped)
+            if sub_match:
+                return f"r/{sub_match.group(1).lower()}"
+
+            for sep in [" \u00b7 ", " | ", " \u2014 ", " \u2013 "]:
+                if sep in stripped:
+                    site = stripped.split(sep)[-1].strip().lower()
+                    page = stripped.split(sep)[0].strip().lower()
+                    if len(site) > 1:
+                        if "reddit" in site or "reddit" in page:
+                            sub = _re.search(r"r/([a-zA-Z0-9_]+)", stripped)
+                            return f"r/{sub.group(1).lower()}" if sub else "reddit"
+                        if "google" in site:
+                            query = page.replace(" - google search", "").strip()
+                            return f"google:{query[:35]}"
+                        return site[:40]
+
+            # Fallback: hyphen split
+            parts = [p.strip() for p in stripped.split(" - ") if p.strip()]
+            if len(parts) >= 2:
+                site = parts[-1].lower()
+                page = parts[0].lower()
+                if "reddit" in site or "reddit" in page:
+                    sub = _re.search(r"r/([a-zA-Z0-9_]+)", stripped)
+                    return f"r/{sub.group(1).lower()}" if sub else "reddit"
+                if "google" in site:
+                    return f"google:{parts[0].lower()[:35]}"
+                return parts[-1].lower()[:40]
+
+            return stripped.lower()[:40]
+
+        suggested_key = extract_key(title)
+
+        # ── Build popup ───────────────────────────────────────────────────────
         popup = tk.Toplevel(self.root)
         popup.overrideredirect(True)
         popup.attributes("-topmost", True)
         popup.configure(bg=C_BG)
 
-        # Centre on screen
-        pw, ph = 360, 110
+        pw, ph = 420, 168
         x = (self._sw - pw) // 2
         y = (self._sh - ph) // 2
         popup.geometry(f"{pw}x{ph}+{x}+{y}")
 
         outer = tk.Frame(popup, bg=C_ACCENT, padx=1, pady=1)
         outer.pack(fill="both", expand=True)
-        inner = tk.Frame(outer, bg=C_BG, padx=10, pady=8)
+        inner = tk.Frame(outer, bg=C_BG, padx=12, pady=10)
         inner.pack(fill="both", expand=True)
 
-        # Show truncated title so user knows what we're asking about
-        short = title[:50] + "..." if len(title) > 50 else title
-        tk.Label(inner, text=f'Is this work?\n"{short}"',
-                bg=C_BG, fg=C_TEXT, font=FONT_BODY,
-                justify="center", wraplength=320).pack(pady=(0, 8))
+        # Show full title
+        short = title[:60] + "..." if len(title) > 60 else title
+        tk.Label(inner, text=f"Is this work?",
+                 bg=C_BG, fg=C_ACCENT,
+                 font=("Courier New", 9, "bold")).pack(anchor="w")
+        tk.Label(inner, text=f'"{short}"',
+                 bg=C_BG, fg=C_DIM,
+                 font=("Courier New", 8),
+                 wraplength=390, justify="left").pack(anchor="w", pady=(2, 8))
+
+        # Editable key field
+        key_row = tk.Frame(inner, bg=C_BG)
+        key_row.pack(fill="x", pady=(0, 8))
+        tk.Label(key_row, text="Save as:",
+                 bg=C_BG, fg=C_TEXT,
+                 font=("Courier New", 8)).pack(side="left", padx=(0, 6))
+        key_var = tk.StringVar(value=suggested_key)
+        key_entry = tk.Entry(key_row, textvariable=key_var,
+                             bg=C_PANEL, fg=C_TEXT,
+                             font=("Courier New", 9),
+                             insertbackground=C_ACCENT,
+                             relief="flat", bd=0, width=32,
+                             highlightthickness=1,
+                             highlightcolor=C_ACCENT,
+                             highlightbackground=C_DIM)
+        key_entry.pack(side="left", ipady=3)
 
         btn_frame = tk.Frame(inner, bg=C_BG)
         btn_frame.pack()
 
-        # Extract a key word from title to store (not the full title)
+        def get_key():
+            k = key_var.get().strip().lower()
+            return k if k else suggested_key
 
-        # ISSUE 1 sorted - instead of using the first segment, use the second-to-last segment for browser titles, which is usually the site name. If that segment contains · or |, use the part after that as the key.
-        def extract_key(t: str) -> str:
-            parts = [p.strip() for p in t.split(" - ") if p.strip()]
-            browsers = ["google chrome", "firefox", "mozilla firefox",
-                        "microsoft edge", "safari", "opera", "brave"]
-            lower_t = t.lower()
-            is_browser = any(b in lower_t for b in browsers)
-            if is_browser and len(parts) >= 2:
-                # Use second-to-last segment — that's the site name in browser titles
-                # e.g. "Issues · GitHub - Google Chrome" → "Issues · GitHub"
-                site_part = parts[-2]
-                # If it contains · or |, the part after is usually the site name
-                for sep in ["·", "|", "–", "—"]:
-                    if sep in site_part:
-                        after = site_part.split(sep)[-1].strip().lower()
-                        if len(after) > 2:
-                            return after[:30]
-                # Otherwise just use the whole segment
-                return site_part.lower()[:30]
-            else:
-                return parts[0].lower()[:30] if parts else t.lower()[:30]
-
-        key = extract_key(title)
-
-        def mark_work():
-            self.known_lists["work"].append(key)
+        def mark_work(event=None):
+            self.known_lists["work"].append(get_key())
             save_known_lists(self.known_lists)
             self._classifying = False
             popup.destroy()
 
         def mark_not_work():
-            self.known_lists["not_work"].append(key)
+            self.known_lists["not_work"].append(get_key())
             save_known_lists(self.known_lists)
             self._classifying = False
             popup.destroy()
-            # Start tracking as non-productive immediately
             self.non_productive_since = time.time()
 
         def auto_dismiss():
-            # Default to work if ignored
-            self.known_lists["work"].append(key)
+            self.known_lists["work"].append(get_key())
             save_known_lists(self.known_lists)
             self._classifying = False
             try:
@@ -511,76 +613,38 @@ class Companion:
             except Exception:
                 pass
 
-        # Work and Not Work buttons
-        tk.Button(btn_frame, text="Work", command=mark_work,
-                bg="#004400", fg="#00ff88", font=FONT_MONO,
-                bd=0, padx=12, pady=4, cursor="hand2",
-                relief="flat").pack(side="left", padx=6)
+        tk.Button(btn_frame, text="\u2713 Work",
+                  command=mark_work,
+                  bg="#004400", fg="#00ff88",
+                  font=FONT_MONO, bd=0, padx=14, pady=4,
+                  cursor="hand2", relief="flat").pack(side="left", padx=6)
 
-        tk.Button(btn_frame, text="Not work", command=mark_not_work,
-                bg="#440000", fg="#ff4444", font=FONT_MONO,
-                bd=0, padx=12, pady=4, cursor="hand2",
-                relief="flat").pack(side="left", padx=6)
+        tk.Button(btn_frame, text="\u2717 Not work",
+                  command=mark_not_work,
+                  bg="#440000", fg="#ff4444",
+                  font=FONT_MONO, bd=0, padx=14, pady=4,
+                  cursor="hand2", relief="flat").pack(side="left", padx=6)
 
-        # Auto-dismiss after 30 seconds
+        countdown_var = tk.StringVar(value="auto-saving as work in 30s")
+        tk.Label(inner, textvariable=countdown_var,
+                 bg=C_BG, fg=C_DIM,
+                 font=("Courier New", 7)).pack(pady=(6, 0))
+
+        def _countdown(secs=30):
+            if not popup.winfo_exists():
+                return
+            if secs <= 0:
+                auto_dismiss()
+                return
+            countdown_var.set(f"auto-saving as work in {secs}s")
+            popup.after(1000, lambda: _countdown(secs - 1))
+
+        popup.after(1000, lambda: _countdown(29))
         popup.after(30_000, auto_dismiss)
+        key_entry.bind("<Return>", mark_work)
+        key_entry.focus()
 
 
-    # ── Non-productive window checker ─────────────────────────────────────────
-    def _check_non_productive(self):
-        if self.current_mode == "not_work":
-            if self.non_productive_since is None:
-                self.non_productive_since = time.time()
-            elapsed = time.time() - self.non_productive_since
-            if elapsed >= self.non_productive_threshold:
-                self.escalation_level += 1
-                # generate message based on escalation level, show bubble, shake it
-                message = self._get_escalation_message()
-                # Pass escalation level so bubble gets progressively worse
-                self.root.after(0, lambda m=message, e=self.escalation_level: self._show_bubble(m, e))
-
-        else:
-            self.non_productive_since = None
-            self.escalation_level = 0
-        self.root.after(30_000, self._check_non_productive)
-
-
-    # ── Generate escalation message ─────────────────────────────────────────────
-    def _get_escalation_message(self) -> str:
-        level = self.escalation_level
-        if level <= 1:
-            tone = "mildly annoyed. Point out they're wasting time. One/two sentence."
-        elif level <= 3:
-            tone = "increasingly irritated. Be blunt and direct. One/two sentence."
-        elif level <= 5:
-            tone = "very annoyed. Be rude and loud. One/two sentence."
-        else:
-            tone = "furious. Be aggressive, cruel, and loud. No filter. One/two sentence."
-        
-        prompt = (
-            f"The user has been on a non-productive window for "
-            f"{int(time.time() - self.non_productive_since)} seconds. "
-            f"Tell them to get back to work. Tone: {tone}"
-        )
-        try:
-            return call_llm(DEFAULT_MODEL, [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": prompt}
-            ], timeout=15)
-        except Exception:
-            # Fallback if LLM is slow/unavailable
-            fallbacks = [
-                "Get back to work.",
-                "Seriously. Work. Now.",
-                "I will not stop until you close this tab.",
-                "You're wasting your time. Get back to work.",
-                "This is getting out of hand. Focus on your work.",
-                "You need to focus. This is not the time for distractions."
-            ]
-            return fallbacks[min(level - 1, len(fallbacks) - 1)]
- 
-
-    # ── Overlay bubble ────────────────────────────────────────────────────────
     def _show_bubble(self, text: str, escalation: int = 0, sound_type: str = "alert"):
         """Pop a glitchy corrupted-dialog bubble at a random screen position."""
         self._dismiss_bubble()
